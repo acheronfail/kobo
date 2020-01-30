@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -120,29 +122,32 @@ func appendFileToFile(a, b string) error {
 func updateKobopatchYaml() error {
 	kobopatchYamlFile, err := ioutil.ReadFile(kobopatchPatchesSrcConfigFile)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to read: "+kobopatchPatchesSrcConfigFile)
 	}
+
+	// Replace `{{version}}` strings in `kobopatch.yaml` with version otherwise yaml parsing fails.
+	kobopatchYamlFile = bytes.Replace(kobopatchYamlFile, []byte("{{version}}"), []byte(*version), -1)
 
 	var kobopatchYaml KobopatchYaml
 	err = yaml.Unmarshal(kobopatchYamlFile, &kobopatchYaml)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to unmarshal: "+kobopatchPatchesSrcConfigFile)
 	}
 
 	overridesYamlFile, err := ioutil.ReadFile(overridesFile)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to read: "+overridesFile)
 	}
 
-	var overridesYaml KobopatchYaml
-	err = yaml.Unmarshal(overridesYamlFile, &overridesYaml)
+	// Overwrite values from the `overrides.yaml` file.
+	err = yaml.Unmarshal(overridesYamlFile, &kobopatchYaml)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to unmarshal: "+overridesFile)
 	}
 
+	// Override the version and in files with the passed version.
 	kobopatchYaml.Version = *version
 	kobopatchYaml.In = fmt.Sprintf("src/kobo-update-%s.zip", *version)
-	kobopatchYaml.Overrides = overridesYaml.Overrides
 
 	kobopatchYamlUpdated, err := yaml.Marshal(kobopatchYaml)
 	if err != nil {
@@ -234,6 +239,10 @@ func prepareKobopatch(v FirmwareVersion) error {
 
 	// Remove any pre-existing yaml files in the kobopatch-patches src directory.
 	err = filepath.Walk(kobopatchPatchesSrcDirectory, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if !f.IsDir() {
 			if filepath.Ext(path) == ".yaml" {
 				err := os.Remove(path)
@@ -250,6 +259,10 @@ func prepareKobopatch(v FirmwareVersion) error {
 	// Concat all patches together.
 	patchfilesDirectory := fmt.Sprintf("kobopatch-patches/src/versions/%s", *version)
 	err = filepath.Walk(patchfilesDirectory, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if !f.IsDir() {
 			yamlFile := filepath.Join(kobopatchPatchesSrcDirectory, filepath.Base(filepath.Dir(path)))
 			err := appendFileToFile(path, yamlFile)

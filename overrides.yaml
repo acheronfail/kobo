@@ -1,7 +1,10 @@
 # Any values in this file will overwite the values in the default `kobopatch.yaml` file.
 # Look at `kobopatch-patches/src/template/kobopatch.yaml` for possible values.
 
-# This, for example, this will ensure that the following patches are enabled when building the firmware:
+# This, for example, will change the log directory.
+log: out/kobopatch-log.txt
+
+# And this will ensure that the following patches are enabled when building the firmware:
 overrides:
   src/nickel.yaml:
     Show all games: yes
