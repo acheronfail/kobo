@@ -1,0 +1,10 @@
+overrides:
+  src/nickel.yaml:
+    Show all games: yes
+  src/libadobe.so.yaml:
+    Keep PDF pan position: yes
+  src/libnickel.so.1.0.0.yaml:
+    Replace adobe page numbers toggle with invert screen: yes
+    Always show confirmation dialog before upgrading: yes
+    Enable advanced settings for all fonts: yes
+  src/librmsdk.so.1.0.0.yaml:

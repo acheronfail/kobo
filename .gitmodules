@@ -1,0 +1,6 @@
+[submodule "kobopatch-patches"]
+	path = kobopatch-patches
+	url = git@github.com:geek1011/kobopatch-patches.git
+[submodule "kobopatch"]
+	path = kobopatch
+	url = git@github.com:geek1011/kobopatch.git
