@@ -3,8 +3,8 @@
 ## Usage
 
 ```bash
-# Prepare workspace (download firmware, prepare patch files)
+# To download base firmware, prepare patch files and build a patched firmware:
 go run main.go
-# Then run the suggested command, for example:
-cd kobopatch-patches/src/template && ./kobopatch.sh && cd -
 ```
+
+That's it!

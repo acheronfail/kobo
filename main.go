@@ -13,26 +13,43 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type FirmwareVersion struct {
-	Date     string `json: "date"`
-	Download string `json: "download"`
-	Version  string `json: "version"`
+	Date     string `json:"date"`
+	Download string `json:"download"`
+	Version  string `json:"version"`
 }
 
 type Firmware struct {
-	Hardware string            `json: "hardware"`
-	Id       string            `json: "id"`
-	Model    string            `json: "model"`
-	Versions []FirmwareVersion `json: "versions"`
+	Hardware string            `json:"hardware"`
+	Id       string            `json:"id"`
+	Model    string            `json:"model"`
+	Versions []FirmwareVersion `json:"versions"`
+}
+
+type KobopatchYaml struct {
+	Version      string                     `yaml:"version"`
+	In           string                     `yaml:"in"`
+	Out          string                     `yaml:"out"`
+	Log          string                     `yaml:"log"`
+	PatchFormat  string                     `yaml:"patchFormat"`
+	Patches      map[string]string          `yaml:"patches"`
+	Overrides    map[string]map[string]bool `yaml:"overrides"`
+	Lrelease     string                     `yaml:"lrelease,omitempty"`
+	Translations map[string]string          `yaml:"translations,omitempty"`
+	Files        map[string]interface{}     `yaml:"files,omitempty"`
 }
 
 const (
-	kobopatchDirectory            = "kobopatch"
-	kobopatchPatchesBinDirectory  = "kobopatch-patches/src/template/bin"
-	kobopatchPatchesSrcDirectory  = "kobopatch-patches/src/template/src"
-	kobopatchPatchesSrcConfigFile = "kobopatch-patches/src/template/kobopatch.yaml"
+	kobopatchDirectory                = "kobopatch"
+	kobopatchPatchesTemplateDirectory = "kobopatch-patches/src/template"
+	kobopatchPatchesBinDirectory      = "kobopatch-patches/src/template/bin"
+	kobopatchPatchesSrcDirectory      = "kobopatch-patches/src/template/src"
+	kobopatchPatchesSrcConfigFile     = "kobopatch-patches/src/template/kobopatch.yaml"
+	overridesFile                     = "overrides.yaml"
 )
 
 var (
@@ -100,21 +117,39 @@ func appendFileToFile(a, b string) error {
 	return err
 }
 
-func replaceLineInFile(filepath, prefix, replace string) error {
-	input, err := ioutil.ReadFile(filepath)
+func updateKobopatchYaml() error {
+	kobopatchYamlFile, err := ioutil.ReadFile(kobopatchPatchesSrcConfigFile)
 	if err != nil {
 		return err
 	}
 
-	lines := strings.Split(string(input), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, prefix) {
-			lines[i] = replace
-		}
+	var kobopatchYaml KobopatchYaml
+	err = yaml.Unmarshal(kobopatchYamlFile, &kobopatchYaml)
+	if err != nil {
+		return err
 	}
 
-	output := strings.Join(lines, "\n")
-	err = ioutil.WriteFile(filepath, []byte(output), 0644)
+	overridesYamlFile, err := ioutil.ReadFile(overridesFile)
+	if err != nil {
+		return err
+	}
+
+	var overridesYaml KobopatchYaml
+	err = yaml.Unmarshal(overridesYamlFile, &overridesYaml)
+	if err != nil {
+		return err
+	}
+
+	kobopatchYaml.Version = *version
+	kobopatchYaml.In = fmt.Sprintf("src/kobo-update-%s.zip", *version)
+	kobopatchYaml.Overrides = overridesYaml.Overrides
+
+	kobopatchYamlUpdated, err := yaml.Marshal(kobopatchYaml)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(kobopatchPatchesSrcConfigFile, kobopatchYamlUpdated, 0644)
 	if err != nil {
 		return err
 	}
@@ -122,57 +157,77 @@ func replaceLineInFile(filepath, prefix, replace string) error {
 	return nil
 }
 
-func mustBuildKobopatch(pkgPath, outfile string, extraArgs []string) {
-	pkgPath, err := filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchDirectory, pkgPath))
-	if err != nil {
-		log.Fatalln(err)
+func buildKobopatch() error {
+	buildPackage := func(pkgPath, outfile string, extraArgs []string) error {
+		pkgPath, err := filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchDirectory, pkgPath))
+		if err != nil {
+			return err
+		}
+
+		outfile, err = filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchPatchesBinDirectory, outfile))
+		if err != nil {
+			return err
+		}
+
+		args := []string{fmt.Sprintf("-o=%s", outfile), fmt.Sprintf("./%s", pkgPath)}
+		if extraArgs != nil {
+			args = append(args, extraArgs...)
+		}
+		args = append([]string{"build"}, args...)
+		fmt.Println(fmt.Sprintf("go %s", strings.Join(args, " ")))
+
+		cmd := exec.Command("go", args...)
+		cmd.Dir = kobopatchDirectory
+
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	outfile, err = filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchPatchesBinDirectory, outfile))
-	if err != nil {
-		log.Fatalln(err)
+	var extraArgs []string
+	buildMap := make(map[string]string)
+
+	switch fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH) {
+	case "linux/amd64":
+		buildMap["kobopatch"] = "kobopatch-linux-64bit"
+		buildMap["tools/cssextract"] = "kobopatch-apply-linux-64bit"
+		buildMap["tools/kobopatch-apply"] = "cssextract-linux-64bit"
+	case "linux/386":
+		buildMap["kobopatch"] = "kobopatch-linux-32bit"
+		buildMap["tools/cssextract"] = "kobopatch-apply-linux-32bit"
+		buildMap["tools/kobopatch-apply"] = "cssextract-linux-32bit"
+	case "darwin/amd64":
+		buildMap["kobopatch"] = "kobopatch-darwin-64bit"
+		buildMap["tools/cssextract"] = "cssextract-darwin-64bit"
+		buildMap["tools/kobopatch-apply"] = "kobopatch-apply-darwin-64bit"
+	case "windows/386":
+		extraArgs = []string{"-ldflags \"-extldflags -static\""}
+		buildMap["kobopatch"] = "koboptch-windows.exe"
+		buildMap["tools/cssextract"] = "cssextract-windows.exe"
+		buildMap["tools/kobopatch-apply"] = "koboptch-apply-windows.exe"
 	}
 
-	args := []string{fmt.Sprintf("-o=%s", outfile), fmt.Sprintf("./%s", pkgPath)}
-	if extraArgs != nil {
-		args = append(args, extraArgs...)
+	for pkg, out := range buildMap {
+		err := buildPackage(pkg, out, extraArgs)
+		if err != nil {
+			return err
+		}
 	}
-	args = append([]string{"build"}, args...)
-	fmt.Println(fmt.Sprintf("go %s", strings.Join(args, " ")))
 
-	cmd := exec.Command("go", args...)
-	cmd.Dir = kobopatchDirectory
-
-	if err := cmd.Run(); err != nil {
-		log.Fatalln(err)
-	}
+	return nil
 }
 
 func prepareKobopatch(v FirmwareVersion) error {
 	// Build kobopatch and place in kobopatchPatchesBinDirectory
-	// TODO: this can be cleaned up.
-	switch fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH) {
-	case "linux/amd64":
-		mustBuildKobopatch("kobopatch", "kobopatch-linux-64bit", nil)
-		mustBuildKobopatch("tools/cssextract", "kobopatch-apply-linux-64bit", nil)
-		mustBuildKobopatch("tools/kobopatch-apply", "cssextract-linux-64bit", nil)
-	case "linux/386":
-		mustBuildKobopatch("kobopatch", "kobopatch-linux-32bit", nil)
-		mustBuildKobopatch("tools/cssextract", "kobopatch-apply-linux-32bit", nil)
-		mustBuildKobopatch("tools/kobopatch-apply", "cssextract-linux-32bit", nil)
-	case "darwin/amd64":
-		mustBuildKobopatch("kobopatch", "kobopatch-darwin-64bit", nil)
-		mustBuildKobopatch("tools/cssextract", "cssextract-darwin-64bit", nil)
-		mustBuildKobopatch("tools/kobopatch-apply", "kobopatch-apply-darwin-64bit", nil)
-	case "windows/386":
-		extraArgs := []string{"-ldflags \"-extldflags -static\""}
-		mustBuildKobopatch("kobopatch", "koboptch-windows.exe", extraArgs)
-		mustBuildKobopatch("tools/cssextract", "cssextract-windows.exe", extraArgs)
-		mustBuildKobopatch("tools/kobopatch-apply", "koboptch-apply-windows.exe", extraArgs)
+	err := buildKobopatch()
+	if err != nil {
+		return err
 	}
 
 	// Download the firmware first.
-	_, err := downloadFirmware(v.Download)
+	_, err = downloadFirmware(v.Download)
 	if err != nil {
 		return err
 	}
@@ -208,25 +263,20 @@ func prepareKobopatch(v FirmwareVersion) error {
 		return err
 	}
 
-	// Update kobopatch.yaml file with version.
-	err = replaceLineInFile(kobopatchPatchesSrcConfigFile, "version: ", fmt.Sprintf("version: %s", *version))
+	// Update kobopatch.yaml with version and overrides.
+	err = updateKobopatchYaml()
 	if err != nil {
 		return err
 	}
 
-	err = replaceLineInFile(kobopatchPatchesSrcConfigFile, "in: ", fmt.Sprintf("in: src/kobo-update-%s.zip", *version))
-	if err != nil {
+	// Run kobopatch.
+	cmd := exec.Command("./kobopatch.sh")
+	cmd.Dir = kobopatchPatchesTemplateDirectory
+	cmd.Stdout = os.Stdout
+
+	if err := cmd.Run(); err != nil {
 		return err
 	}
-
-	// TODO: update kobopatch.yaml with overrides.
-
-	fmt.Println("")
-	fmt.Println("Patch files are ready!")
-	fmt.Println("Update kobopatch-patches/src/template/kobopatch.yaml with your desired overrides.")
-	fmt.Println("When ready, run the following to generate a patched firmware blob:")
-	fmt.Println("")
-	fmt.Println("  cd kobopatch-patches/src/template && ./kobopatch.sh && cd -")
 
 	return nil
 }
