@@ -11,6 +11,7 @@ I initially created this because I found using [kobopatch-patches] a little cumb
 go run main.go -uuid $UUID_OF_YOUR_KOBO_MODEL -version $DESIRED_VERSION_TO_PATCH
 ```
 
+Now your patched firmware will be found at `build/out/KoboRoot.tgz`!  
 That's it! 🎉
 
 ## Usage

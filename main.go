@@ -46,12 +46,15 @@ type KobopatchYaml struct {
 }
 
 const (
-	kobopatchDirectory                = "kobopatch"
-	kobopatchPatchesTemplateDirectory = "kobopatch-patches/src/template"
-	kobopatchPatchesBinDirectory      = "kobopatch-patches/src/template/bin"
-	kobopatchPatchesSrcDirectory      = "kobopatch-patches/src/template/src"
-	kobopatchPatchesSrcConfigFile     = "kobopatch-patches/src/template/kobopatch.yaml"
-	overridesFile                     = "overrides.yaml"
+	kobopatchDirectory           = "kobopatch"
+	kobopatchPatchesBinDirectory = "kobopatch-patches/src/template/bin"
+	kobopatchPatchesSrcYamlFile  = "kobopatch-patches/src/template/kobopatch.yaml"
+	overridesFile                = "overrides.yaml"
+	buildDirectory               = "build"
+	buildBinDirectory            = "build/bin"
+	buildOutDirectory            = "build/out"
+	buildSrcDirectory            = "build/src"
+	buildYamlFile                = "build/kobopatch.yaml"
 )
 
 var (
@@ -69,7 +72,7 @@ func init() {
 }
 
 func downloadFirmware(url string) (string, error) {
-	outfile := filepath.Join(kobopatchPatchesSrcDirectory, fmt.Sprintf("kobo-update-%s.zip", *version))
+	outfile := filepath.Join(buildSrcDirectory, fmt.Sprintf("kobo-update-%s.zip", *version))
 	if _, err := os.Stat(outfile); os.IsNotExist(err) {
 		fmt.Println("Downloading: " + url)
 		resp, err := http.Get(url)
@@ -120,9 +123,9 @@ func appendFileToFile(a, b string) error {
 }
 
 func updateKobopatchYaml() error {
-	kobopatchYamlFile, err := ioutil.ReadFile(kobopatchPatchesSrcConfigFile)
+	kobopatchYamlFile, err := ioutil.ReadFile(kobopatchPatchesSrcYamlFile)
 	if err != nil {
-		return errors.Wrap(err, "failed to read: "+kobopatchPatchesSrcConfigFile)
+		return errors.Wrap(err, "failed to read: "+kobopatchPatchesSrcYamlFile)
 	}
 
 	// Replace `{{version}}` strings in `kobopatch.yaml` with version otherwise yaml parsing fails.
@@ -131,7 +134,7 @@ func updateKobopatchYaml() error {
 	var kobopatchYaml KobopatchYaml
 	err = yaml.Unmarshal(kobopatchYamlFile, &kobopatchYaml)
 	if err != nil {
-		return errors.Wrap(err, "failed to unmarshal: "+kobopatchPatchesSrcConfigFile)
+		return errors.Wrap(err, "failed to unmarshal: "+kobopatchPatchesSrcYamlFile)
 	}
 
 	overridesYamlFile, err := ioutil.ReadFile(overridesFile)
@@ -149,12 +152,13 @@ func updateKobopatchYaml() error {
 	kobopatchYaml.Version = *version
 	kobopatchYaml.In = fmt.Sprintf("src/kobo-update-%s.zip", *version)
 
+	// Write out a new `kobopatch.yaml` file with the version and overrides applied.
 	kobopatchYamlUpdated, err := yaml.Marshal(kobopatchYaml)
 	if err != nil {
 		return err
 	}
 
-	err = ioutil.WriteFile(kobopatchPatchesSrcConfigFile, kobopatchYamlUpdated, 0644)
+	err = ioutil.WriteFile(buildYamlFile, kobopatchYamlUpdated, 0644)
 	if err != nil {
 		return err
 	}
@@ -162,14 +166,14 @@ func updateKobopatchYaml() error {
 	return nil
 }
 
-func buildKobopatch() error {
+func buildKobopatch() (map[string]string, error) {
 	buildPackage := func(pkgPath, outfile string, extraArgs []string) error {
 		pkgPath, err := filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchDirectory, pkgPath))
 		if err != nil {
 			return err
 		}
 
-		outfile, err = filepath.Rel(kobopatchDirectory, filepath.Join(kobopatchPatchesBinDirectory, outfile))
+		outfile, err = filepath.Rel(kobopatchDirectory, filepath.Join(buildBinDirectory, outfile))
 		if err != nil {
 			return err
 		}
@@ -217,16 +221,16 @@ func buildKobopatch() error {
 	for pkg, out := range buildMap {
 		err := buildPackage(pkg, out, extraArgs)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return buildMap, nil
 }
 
-func prepareKobopatch(v FirmwareVersion) error {
+func patchFirmware(v FirmwareVersion) error {
 	// Build kobopatch and place in kobopatchPatchesBinDirectory
-	err := buildKobopatch()
+	buildMap, err := buildKobopatch()
 	if err != nil {
 		return err
 	}
@@ -237,8 +241,8 @@ func prepareKobopatch(v FirmwareVersion) error {
 		return err
 	}
 
-	// Remove any pre-existing yaml files in the kobopatch-patches src directory.
-	err = filepath.Walk(kobopatchPatchesSrcDirectory, func(path string, f os.FileInfo, err error) error {
+	// Remove any pre-built yaml files.
+	err = filepath.Walk(buildSrcDirectory, func(path string, f os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -264,7 +268,7 @@ func prepareKobopatch(v FirmwareVersion) error {
 		}
 
 		if !f.IsDir() {
-			yamlFile := filepath.Join(kobopatchPatchesSrcDirectory, filepath.Base(filepath.Dir(path)))
+			yamlFile := filepath.Join(buildSrcDirectory, filepath.Base(filepath.Dir(path)))
 			err := appendFileToFile(path, yamlFile)
 			return err
 		}
@@ -282,9 +286,9 @@ func prepareKobopatch(v FirmwareVersion) error {
 		return err
 	}
 
-	// Run kobopatch.
-	cmd := exec.Command("./kobopatch.sh")
-	cmd.Dir = kobopatchPatchesTemplateDirectory
+	// Run the kobopatch binary with the generated `kobopatch.yaml` file.
+	cmd := exec.Command(fmt.Sprintf("./bin/%s", buildMap["kobopatch"]))
+	cmd.Dir = buildDirectory
 	cmd.Stdout = os.Stdout
 
 	if err := cmd.Run(); err != nil {
@@ -295,6 +299,16 @@ func prepareKobopatch(v FirmwareVersion) error {
 }
 
 func main() {
+	// Create required directories.
+	requiredDirectories := []string{buildDirectory, buildBinDirectory, buildOutDirectory, buildSrcDirectory}
+	for _, dir := range requiredDirectories {
+		err := os.MkdirAll(dir, os.ModePerm)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
+
+	// Read and decode the firmwares file.
 	firmwareFile, err := ioutil.ReadFile("firmwares.json")
 	if err != nil {
 		log.Fatalln(err)
@@ -306,11 +320,12 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	// Find the desired firmware and patch it.
 	for _, fw := range firmwares {
 		if fw.Id == *uuid {
 			for _, v := range fw.Versions {
 				if v.Version == *version {
-					err := prepareKobopatch(v)
+					err := patchFirmware(v)
 					if err != nil {
 						log.Fatalln(err)
 					}

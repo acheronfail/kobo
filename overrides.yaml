@@ -1,8 +1,8 @@
 # Any values in this file will overwite the values in the default `kobopatch.yaml` file.
 # Look at `kobopatch-patches/src/template/kobopatch.yaml` for possible values.
 
-# This, for example, will change the log directory.
-log: out/kobopatch-log.txt
+# This, for example, will change the log filepath.
+log: out/build-log.txt
 
 # And this will ensure that the following patches are enabled when building the firmware:
 overrides:
