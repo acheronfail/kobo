@@ -28,6 +28,16 @@ Options:
 
 Have a look at the [firmwares.json] file to find the right uuid (and available versions) for your Kobo.
 
+## Credits
+
+Many thanks to:
+
+* the creator and contributors of [kobopatch] and [kobopatch-patches] for providing
+	- The great tools for patching Kobo firmware
+	- The fantastic list of patches for each firmware version
+	- The database of Kobo [firmwares] available for download
+
 [kobopatch]: https://github.com/geek1011/kobopatch
 [kobopatch-patches]: https://github.com/geek1011/kobopatch-patches
+[firmwares]: https://github.com/geek1011/KoboStuff/blob/gh-pages/db.js
 [firmwares.json]: ./firmwares.json
